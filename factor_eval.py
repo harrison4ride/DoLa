@@ -180,7 +180,7 @@ if __name__ == "__main__":
         list_data_dict = list_data_dict[args.shard_id * chunk_size: (args.shard_id + 1) * chunk_size]
 
     if args.debug:
-        list_data_dict = list_data_dict[:10]
+        list_data_dict = list_data_dict[:3]
     
     llm = DoLa(model_name, device, num_gpus, args.max_gpu_memory)
     llm.set_stop_words(["Q:", "\end{code}"])

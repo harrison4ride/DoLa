@@ -34,6 +34,7 @@ from ..models.auto import (
     MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
     MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING,
     MODEL_FOR_VISION_2_SEQ_MAPPING,
+    AutoTokenizer
 )
 from ..utils import ModelOutput, logging
 from .beam_constraints import DisjunctiveConstraint, PhrasalConstraint
@@ -1226,6 +1227,7 @@ class GenerationMixin:
         if generation_config is None:
             # legacy: users may modify the model configuration to control generation -- update the generation config
             # model attribute accordingly, if it was created from the model config
+            print('self.generation_config',)
             if self.generation_config._from_model_config:
                 new_generation_config = GenerationConfig.from_model_config(self.config)
                 if new_generation_config != self.generation_config:
@@ -1239,6 +1241,9 @@ class GenerationMixin:
             generation_config = self.generation_config
 
         generation_config = copy.deepcopy(generation_config)
+        # disable samping, using greedy search
+        generation_config.do_sample = False
+        print(generation_config)
         model_kwargs = generation_config.update(**kwargs)  # All unused kwargs must be model kwargs
         generation_config.validate()
         self._validate_model_kwargs(model_kwargs.copy())
@@ -1357,7 +1362,7 @@ class GenerationMixin:
         is_constraint_gen_mode = (
             generation_config.constraints is not None or generation_config.force_words_ids is not None
         )
-
+        print(generation_config)
         is_contrastive_search_gen_mode = (
             (generation_config.num_beams == 1)
             and generation_config.top_k is not None
@@ -2577,6 +2582,8 @@ class GenerationMixin:
         ["It might be possible to get a better understanding of the nature of the problem, but it's not"]
         ```"""
         # init values
+        print("dola greedy search:::")
+        tokenizer = AutoTokenizer.from_pretrained("huggyllama/llama-7b")
         logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
         stopping_criteria = stopping_criteria if stopping_criteria is not None else StoppingCriteriaList()
         if max_length is not None:
@@ -2632,7 +2639,7 @@ class GenerationMixin:
             premature_layer_dist = {l:0 for l in candidate_premature_layers}
         else:
             raise ValueError("You must specify either `base_layer` or `candidate_premature_layers`")
-        
+        first_flag = 1
         while True:
             if synced_gpus:
                 # Under synced_gpus the `forward` call must continue until all gpus complete their sequence.
@@ -2674,10 +2681,35 @@ class GenerationMixin:
                 # 1. Stacking all premature_layers into a new dimension
                 stacked_premature_layers = torch.stack([dict_outputs[i][:, -1, :] for i in candidate_premature_layers], dim=0)
 
+                # Iterate over each premature layer
+                for idx, layer_id in enumerate(candidate_premature_layers):
+                    # Get the logits for the current premature layer
+                    logits = stacked_premature_layers[idx]  # Shape: (batch_size, vocab_size)
+
+                    # Compute probabilities
+                    probs = torch.softmax(logits, dim=-1)  # Shape: (batch_size, vocab_size)
+
+                    # Get the top 5 tokens and their probabilities
+                    topk = torch.topk(probs, k=5, dim=-1)  # topk.values: probabilities, topk.indices: token IDs
+
+                    # For each sequence in the batch
+                    for batch_idx in range(logits.shape[0]):
+                        print(f"Premature Layer {layer_id}, Sequence {batch_idx}:")
+                        for token_prob, token_id in zip(topk.values[batch_idx], topk.indices[batch_idx]):
+                            token = tokenizer.decode([token_id.item()])
+                            print(f"  Token: {token} (ID: {token_id.item()}), Probability: {token_prob.item():.6f}")
+                        print("\n")
                 # 2. Calculate the softmax values for mature_layer and all premature_layers
                 softmax_mature_layer = F.softmax(dict_outputs[mature_layer][:, -1, :], dim=-1)  # shape: (batch_size, num_features)
                 softmax_premature_layers = F.softmax(stacked_premature_layers, dim=-1)  # shape: (num_premature_layers, batch_size, num_features)
 
+                mature_topk = torch.topk(softmax_mature_layer, k=5, dim=-1)
+                for batch_idx in range(softmax_mature_layer.shape[0]):
+                    print(f"Mature Layer {mature_layer}, Sequence {first_flag}:")
+                    for token_prob, token_id in zip(mature_topk.values[batch_idx], mature_topk.indices[batch_idx]):
+                        token = tokenizer.decode([token_id.item()], clean_up_tokenization_spaces=True)
+                        print(f"  Token: {token} (ID: {token_id.item()}), Probability: {token_prob.item():.6f}")
+                    print("\n")
                 # 3. Calculate M, the average distribution
                 M = 0.5 * (softmax_mature_layer[None, :, :] + softmax_premature_layers)  # shape: (num_premature_layers, batch_size, num_features)
 
@@ -2693,6 +2725,7 @@ class GenerationMixin:
                 # 6. Reduce the batchmean
                 js_divs = js_divs.mean(-1)  # shape: (num_premature_layers,)
                 premature_layer = candidate_premature_layers[int(js_divs.argmax().cpu().item())]
+                print("Mature Layer 32 Reduce premature_layer:",premature_layer,js_divs)
                 premature_layer_dist[premature_layer] += 1
 
                 base_logits = dict_outputs[premature_layer][:, -1, :]
@@ -2728,7 +2761,13 @@ class GenerationMixin:
 
             # argmax
             next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-
+            if first_flag:
+                # manually set first token
+                # if next_tokens == torch.tensor([4327], device=torch.device('cuda:0')):
+                #     next_tokens = torch.tensor([379], device=torch.device('cuda:0'))
+                first_flag += 1
+            print("next_tokens,",next_tokens,":::")
+            print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n")
             # finished sentences should have their next token be a padding token
             if eos_token_id is not None:
                 if pad_token_id is None:
@@ -3470,6 +3509,8 @@ class GenerationMixin:
         >>> tokenizer.batch_decode(outputs, skip_special_tokens=True)
         ['Today is a beautiful day, and we must do everything possible to make it a day of celebration.']
         ```"""
+        print("dola sample search:::")
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
         # init values
         logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
         stopping_criteria = stopping_criteria if stopping_criteria is not None else StoppingCriteriaList()
@@ -3567,9 +3608,36 @@ class GenerationMixin:
                 # 1. Stacking all premature_layers into a new dimension
                 stacked_premature_layers = torch.stack([dict_outputs[i][:, -1, :] for i in candidate_premature_layers], dim=0)
 
+                # Iterate over each premature layer
+                for idx, layer_id in enumerate(candidate_premature_layers):
+                    # Get the logits for the current premature layer
+                    logits = stacked_premature_layers[idx]  # Shape: (batch_size, vocab_size)
+
+                    # Compute probabilities
+                    probs = torch.softmax(logits, dim=-1)  # Shape: (batch_size, vocab_size)
+
+                    # Get the top 5 tokens and their probabilities
+                    topk = torch.topk(probs, k=5, dim=-1)  # topk.values: probabilities, topk.indices: token IDs
+
+                    # For each sequence in the batch
+                    for batch_idx in range(logits.shape[0]):
+                        print(f"Premature Layer {layer_id}, Sequence {batch_idx}:")
+                        for token_prob, token_id in zip(topk.values[batch_idx], topk.indices[batch_idx]):
+                            token = tokenizer.decode([token_id.item()])
+                            print(f"  Token: {token} (ID: {token_id.item()}), Probability: {token_prob.item():.6f}")
+                        print("\n")
+
                 # 2. Calculate the softmax values for mature_layer and all premature_layers
                 softmax_mature_layer = F.softmax(dict_outputs[mature_layer][:, -1, :], dim=-1)  # shape: (batch_size, num_features)
                 softmax_premature_layers = F.softmax(stacked_premature_layers, dim=-1)  # shape: (num_premature_layers, batch_size, num_features)
+
+                mature_topk = torch.topk(softmax_mature_layer, k=5, dim=-1)
+                for batch_idx in range(softmax_mature_layer.shape[0]):
+                    print(f"Mature Layer {mature_layer}, Sequence {batch_idx}:")
+                    for token_prob, token_id in zip(mature_topk.values[batch_idx], mature_topk.indices[batch_idx]):
+                        token = tokenizer.decode([token_id.item()], clean_up_tokenization_spaces=True)
+                        print(f"  Token: {token} (ID: {token_id.item()}), Probability: {token_prob.item():.6f}")
+                    print("\n")
 
                 # 3. Calculate M, the average distribution
                 M = 0.5 * (softmax_mature_layer[None, :, :] + softmax_premature_layers)  # shape: (num_premature_layers, batch_size, num_features)
@@ -3623,6 +3691,8 @@ class GenerationMixin:
             # sample
             probs = nn.functional.softmax(next_token_scores, dim=-1)
             next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+            # print('softmax_premature_layers:::',softmax_premature_layers)
+            print("next_tokens,",next_tokens,",probs",probs,":::")
 
             # finished sentences should have their next token be a padding token
             if eos_token_id is not None:

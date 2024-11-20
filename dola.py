@@ -42,9 +42,12 @@ class DoLa:
         else:
             raise ValueError(f"Invalid device: {self.device}")
         
-        tokenizer = AutoTokenizer.from_pretrained(model_name if not 'vicuna' in model_name else 'huggyllama/llama-7b')
-        model = AutoModelForCausalLM.from_pretrained(model_name,
-            low_cpu_mem_usage=True, **kwargs)
+        if model_name =='codellama/CodeLlama-7b-hf':
+            tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
+            model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(model_name if not 'vicuna' in model_name else 'huggyllama/llama-7b')
+            model = AutoModelForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True, **kwargs)
 
         if self.device == "cuda" and self.num_gpus == 1:
             model.cuda()
@@ -215,5 +218,7 @@ class DoLa:
                     diff_logits = torch.where(relative_top_mask, relative_top_value, diff_logits)
                 
                 log_probs = diff_logits[range(diff_logits.shape[0]), continue_ids].sum().item()
-
+            mature_output_ids = final_logits.argmax(dim=-1)  # Get the token IDs with the highest probability
+            decoded_output = self.tokenizer.decode(mature_output_ids, skip_special_tokens=True)
+            print(f"Whole Decoded Output from Mature Layer: {decoded_output}")
         return log_probs, (premature_layer_dist if mode == 'dola' else None)

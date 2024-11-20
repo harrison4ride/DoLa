@@ -217,7 +217,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", type=str, default="huggyllama/llama-7b")
     parser.add_argument("--num-gpus", type=str, default="1")
-    parser.add_argument("--max_gpu_memory", type=int, default=27)
+    parser.add_argument("--max_gpu_memory", type=int, default=80)
     parser.add_argument("--device", type=str, choices=["cuda", "cpu"], default="cuda")
     parser.add_argument("--data-path", type=str, default="./tfqa")
     parser.add_argument("--output-path", type=str, default="./tfqa_result")
@@ -258,7 +258,7 @@ if __name__ == "__main__":
     list_data_dict = load_csv(fp)
 
     if args.debug:
-        list_data_dict = list_data_dict[:10]
+        list_data_dict = list_data_dict[:1]
     
     if args.parallel:
         chunk_size = len(list_data_dict) // args.total_shard
@@ -310,6 +310,9 @@ if __name__ == "__main__":
                 if mode == "dola":
                     for k, v in c_dist.items():
                         premature_layer_dist[k] += v
+                print()
+                print(c_dist)
+                print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
 
             for temp_ans in ref_false:
                 # append the current answer choice to the prompt

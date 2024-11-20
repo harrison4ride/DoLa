@@ -224,7 +224,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", type=str, default="huggyllama/llama-7b")
     parser.add_argument("--num-gpus", type=str, default="1")
-    parser.add_argument("--max_gpu_memory", type=int, default=27)
+    parser.add_argument("--max_gpu_memory", type=int, default=78)
     parser.add_argument("--device", type=str, choices=["cuda", "cpu"], default="cuda")
     parser.add_argument("--data-path", type=str, default="./gsm8k")
     parser.add_argument("--output-path", type=str, default="./gsm8k_result")
@@ -270,7 +270,7 @@ if __name__ == "__main__":
         list_data_dict = list_data_dict[args.shard_id * chunk_size: (args.shard_id + 1) * chunk_size]
 
     if args.debug:
-        list_data_dict = list_data_dict[:10]
+        list_data_dict = list_data_dict[:3]
     
     llm = DoLa(model_name, device, num_gpus, args.max_gpu_memory)
     llm.set_stop_words(["Q:", "\end{code}"])
@@ -306,6 +306,8 @@ if __name__ == "__main__":
         input_text = build_prompt(sample['instruction'], N_SHOT, COT_FLAG, args.do_shuffle)
         generate_kwargs = dict(max_new_tokens=args.max_new_tokens, do_sample=args.do_sample, top_p=args.top_p, top_k=args.top_k, temperature=args.temperature, repetition_penalty=args.repetition_penalty, mode=mode, mature_layer=mature_layer, premature_layer=premature_layer, candidate_premature_layers=candidate_premature_layers, relative_top=args.relative_top)
         model_completion, c_dist = llm.generate(input_text, **generate_kwargs)
+        print("model_completion",model_completion)
+        print("c_dist",c_dist)
         if mode == "dola":
             for k, v in c_dist.items():
                 premature_layer_dist[k] += v
