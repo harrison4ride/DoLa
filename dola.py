@@ -8,7 +8,7 @@ import json
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer
-from transformers.generation.stopping_criteria import StoppingCriteriaList, LLamaQaStoppingCriteria
+from transformers.generation.stopping_criteria import StoppingCriteriaList, StoppingCriteria
 
 import argparse
 import warnings
@@ -62,13 +62,14 @@ class DoLa:
             stop_word_ids = self.tokenizer.encode('\n' + stop_word)[3:]
             list_stop_word_ids.append(stop_word_ids)
             print("Added stop word: ", stop_word, 'with the ids', stop_word_ids, flush=True)
-        self.stopping_criteria.append(LLamaQaStoppingCriteria(list_stop_word_ids))
+        # self.stopping_criteria.append(LLamaQaStoppingCriteria(list_stop_word_ids))
 
     def generate(self, input_text, max_new_tokens=256, top_p=0.95, top_k=0, temperature=0.8, mature_layer=None, premature_layer=None, candidate_premature_layers=[], mode='baseline', verbose=True, remove_stop_words=False, relative_top=0.1, **kwargs):
         with torch.no_grad():
 
             input_ids = self.tokenizer(input_text, return_tensors="pt").input_ids.to(self.device)
             max_len = input_ids.shape[-1] + max_new_tokens
+            print(input_ids.shape[-1])
 
             if mode == 'baseline':
                 outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
@@ -84,10 +85,16 @@ class DoLa:
             elif mode == 'dola':
                 assert mature_layer is not None, "mature_layer must be specified"
                 assert candidate_premature_layers is not None, "candidate_premature_layers must be specified"
+                # tranformers 4.46.3
                 outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
-                                        output_scores=True, return_dict_in_generate=True, dola_decoding=True,
-                                        top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, relative_top=relative_top, 
-                                        mature_layer=mature_layer, premature_layer=None, candidate_premature_layers=candidate_premature_layers, **kwargs,)
+                                        output_scores=True, return_dict_in_generate=True, do_sample=False,
+                                        top_p=top_p, top_k=top_k, dola_layers='high', temperature=temperature, stopping_criteria=self.stopping_criteria, **kwargs,)
+                # transformers 4.28
+                # outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
+                #                         output_scores=True, return_dict_in_generate=True, dola_decoding=True,
+                #                         top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, relative_top=relative_top, 
+                #                         mature_layer=mature_layer, premature_layer=None, candidate_premature_layers=candidate_premature_layers, **kwargs,)
+                print('\n+++++++++++++++++++\n',self.tokenizer.batch_decode(outputs.sequences[:, input_ids.shape[-1]:], skip_special_tokens=True))
                 premature_layer_dist = outputs.premature_layer_dist
             sequences, scores = outputs.sequences, outputs.scores
 
