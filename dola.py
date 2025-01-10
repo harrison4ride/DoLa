@@ -4,6 +4,7 @@ import csv
 import tqdm
 import os
 import json
+import logging
 
 import torch
 import torch.nn.functional as F
@@ -43,14 +44,15 @@ class DoLa:
             raise ValueError(f"Invalid device: {self.device}")
         
         if model_name =='codellama/CodeLlama-7b-hf':
-            tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
-            model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
+            tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B") # meta-llama/Llama-2-7b-chat-hf deepseek-ai/deepseek-coder-6.7b-base
+            model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B") #meta-llama/Llama-3.1-8B
         else:
             tokenizer = AutoTokenizer.from_pretrained(model_name if not 'vicuna' in model_name else 'huggyllama/llama-7b')
             model = AutoModelForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True, **kwargs)
 
         if self.device == "cuda" and self.num_gpus == 1:
-            model.cuda()
+            # model.cuda()
+            model.to(torch.device("cuda"))
         
         return model, tokenizer
 
@@ -69,11 +71,14 @@ class DoLa:
 
             input_ids = self.tokenizer(input_text, return_tensors="pt").input_ids.to(self.device)
             max_len = input_ids.shape[-1] + max_new_tokens
-            print(input_ids.shape[-1])
 
             if mode == 'baseline':
+                # outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
+                #                     output_scores=True, return_dict_in_generate=True, dola_decoding=False,
+                #                     top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, **kwargs)
+                # Greedy search
                 outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
-                                    output_scores=True, return_dict_in_generate=True, dola_decoding=False,
+                                    output_scores=True, return_dict_in_generate=True, do_sample=False,
                                     top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, **kwargs)
             elif mode == 'dola-static':
                 assert mature_layer is not None, "mature_layer must be specified"
@@ -94,8 +99,7 @@ class DoLa:
                 #                         output_scores=True, return_dict_in_generate=True, dola_decoding=True,
                 #                         top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, relative_top=relative_top, 
                 #                         mature_layer=mature_layer, premature_layer=None, candidate_premature_layers=candidate_premature_layers, **kwargs,)
-                print('\n+++++++++++++++++++\n',self.tokenizer.batch_decode(outputs.sequences[:, input_ids.shape[-1]:], skip_special_tokens=True))
-                premature_layer_dist = outputs.premature_layer_dist
+                premature_layer_dist = None #outputs.premature_layer_dist
             sequences, scores = outputs.sequences, outputs.scores
 
             # skip the tokens in the input prompt
@@ -105,7 +109,7 @@ class DoLa:
             output_str = self.tokenizer.decode(gen_sequences, skip_special_tokens=True)
 
             if verbose:
-                print('MODEL OUTPUT: \n{0}'.format(output_str))
+                print('MODEL OUTPUT: \n{0}'.format(output_str),"\nMODEL OUTPUT END")
 
             if remove_stop_words:
                 for stop_word in self.stop_words:
